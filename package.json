@@ -4,7 +4,6 @@
   "private": true,
   "description": "PI-Desktop plugin: attach local images, audio, video and PDFs mentioned with @ to the model request.",
   "license": "MIT",
-  "type": "module",
   "scripts": {
     "test": "node --test test/",
     "typecheck": "tsc --noEmit"
