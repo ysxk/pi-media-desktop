@@ -1,0 +1,52 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  pack-and-release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install plugin devkit
+        # The devkit lives in the PI-Desktop monorepo; clone it and install the CLI.
+        run: |
+          git clone --depth 1 https://github.com/vastsa/PI-Desktop.git .devkit/PI-Desktop
+          cd .devkit/PI-Desktop
+          pnpm install --filter @pi-desktop/plugin-devkit...
+          pnpm --filter @pi-desktop/plugin-sdk run build
+          pnpm --filter @pi-desktop/plugin-devkit run build
+
+      - name: pi-plugin check
+        run: |
+          node .devkit/PI-Desktop/packages/plugin-devkit/dist/cli.js check .
+
+      - name: pi-plugin pack
+        run: |
+          node .devkit/PI-Desktop/packages/plugin-devkit/dist/cli.js pack .
+
+      - name: Create GitHub release with .piplug
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PKG=$(ls dist/*.piplug | head -n1)
+          NAME=$(basename "$PKG" .piplug)
+          gh release create "$GITHUB_REF_NAME" "$PKG" \
+            --title "$NAME" \
+            --notes "PI-Desktop → Plugins → Install plugin package → choose \`$(basename "$PKG")\`"

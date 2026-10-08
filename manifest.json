@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "local.pi-media",
+  "name": "pi-media",
+  "version": "0.1.0",
+  "description": "Attach local images, audio, video and PDFs mentioned with @ to the model request.",
+  "main": "main.js",
+  "permissions": ["agent.extension"],
+  "contributes": {
+    "agentExtensions": ["src/index.ts"]
+  },
+  "engines": {
+    "piDesktop": ">=0.1.0"
+  }
+}
