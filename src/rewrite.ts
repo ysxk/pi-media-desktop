@@ -15,6 +15,10 @@
 import { readFile } from "node:fs/promises";
 import { hasMarker, makeMarker, markersToMentions, splitMarkers } from "./media.ts";
 
+// Gemini inline part shape accepted by the Generative AI SDK.
+type GeminiInlinePart = { inlineData: { data: string; mimeType: string } };
+type GeminiTextPart = { text: string };
+
 type FilePart = { type: "file"; file: { data: string; media_type: string } };
 type ContentPart = { type: "text"; text: string } | FilePart;
 
@@ -114,6 +118,53 @@ function collectMarkerPaths(text: string, out: string[]) {
 	}
 }
 
+/** Gemini: expand markers inside `contents[].parts[].text` into inlineData parts. */
+async function expandGemini(payload: { contents: unknown[] }) {
+	let changed = false;
+	const contents = await Promise.all(
+		payload.contents.map(async (entry) => {
+			if (!entry || typeof entry !== "object") return entry;
+			const record = entry as { role?: unknown; parts?: unknown };
+			if (!Array.isArray(record.parts)) return entry;
+			const parts = await Promise.all(
+				record.parts.map(async (part) => {
+					if (!part || typeof part !== "object") return [part];
+					const p = part as { text?: unknown };
+					if (typeof p.text !== "string" || !hasMarker(p.text)) return [part];
+					const segments = splitMarkers(p.text);
+					if (!segments.some((s) => s.type === "media")) return [part];
+					const expanded: Array<GeminiTextPart | GeminiInlinePart> = [];
+					for (const segment of segments) {
+						if (segment.type === "text") {
+							if (segment.text.trim().length > 0) expanded.push({ text: segment.text });
+							continue;
+						}
+						try {
+							const bytes = await readFile(segment.path);
+							expanded.push({ inlineData: { data: bytes.toString("base64"), mimeType: segment.mediaType } });
+						} catch {
+							expanded.push({ text: makeMarker(segment.path, segment.mediaType) });
+						}
+					}
+					return expanded;
+				}),
+			);
+			const flat = parts.flat();
+			const original = record.parts as unknown[];
+			if (flat.length === original.length && flat.every((p, i) => p === original[i])) return entry;
+			changed = true;
+			return { ...record, parts: flat };
+		}),
+	);
+	if (!changed) return undefined;
+	const body = payload as Record<string, unknown>;
+	return { ...body, contents };
+}
+
+function isGeminiPayload(payload: Record<string, unknown>): boolean {
+	return Array.isArray(payload.contents);
+}
+
 /** Walk any payload shape, restore markers to @path text, and collect the file names. */
 function restoreMarkersDeep(value: unknown, out: string[]): unknown {
 	if (typeof value === "string") {
@@ -136,12 +187,17 @@ function restoreMarkersDeep(value: unknown, out: string[]): unknown {
 	return value;
 }
 
-function countAttachedFiles(value: unknown): number {
+function countAttachedFiles(value: unknown, partKind: "file" | "inlineData"): number {
 	if (!value || typeof value !== "object") return 0;
-	if (Array.isArray(value)) return value.reduce((sum, item) => sum + countAttachedFiles(item), 0);
+	if (Array.isArray(value)) return value.reduce((sum, item) => sum + countAttachedFiles(item, partKind), 0);
 	const record = value as Record<string, unknown>;
-	let count = record.type === "file" && typeof (record.file as { data?: unknown })?.data === "string" ? 1 : 0;
-	for (const item of Object.values(record)) count += countAttachedFiles(item);
+	let count = 0;
+	if (partKind === "file") {
+		if (record.type === "file" && typeof (record.file as { data?: unknown })?.data === "string") count = 1;
+	} else {
+		if (typeof (record.inlineData as { data?: unknown })?.data === "string") count = 1;
+	}
+	for (const item of Object.values(record)) count += countAttachedFiles(item, partKind);
 	return count;
 }
 
@@ -168,10 +224,18 @@ export async function rewritePayload(payload: unknown): Promise<RewriteOutcome> 
 	const markerPaths: string[] = [];
 	collectMarkerPathsDeep(payload, markerPaths);
 
+	if (isGeminiPayload(body as Record<string, unknown>)) {
+		const rewritten = await expandGemini(body as { contents: unknown[] });
+		if (rewritten === undefined) return { attached: 0, unattachedNames: [] };
+		const attached = countAttachedFiles(rewritten, "inlineData");
+		const unattached = attached >= markerPaths.length ? [] : markerPaths.slice(attached);
+		return { payload: rewritten, attached, unattachedNames: unattached };
+	}
+
 	if (isChatCompletionsPayload(body)) {
 		const rewritten = await expandChatCompletions(body as { messages: unknown[] });
 		if (rewritten === undefined) return { attached: 0, unattachedNames: [] };
-		const attached = countAttachedFiles(rewritten);
+		const attached = countAttachedFiles(rewritten, "file");
 		// Markers that survived expansion are files that became unreadable
 		// between the scan and the read — surface them rather than fail silently.
 		const unattached = attached >= markerPaths.length ? [] : markerPaths.slice(attached);

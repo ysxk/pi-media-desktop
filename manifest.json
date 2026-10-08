@@ -4,7 +4,7 @@
   "name": "pi-media",
   "version": "0.1.1",
   "description": "Attach local images, audio, video and PDFs mentioned with @ to the model request.",
-  "main": "main.js",
+  "main": "main.cjs",
   "permissions": ["agent.extension"],
   "contributes": {
     "agentExtensions": ["src/index.ts"]

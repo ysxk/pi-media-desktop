@@ -109,17 +109,63 @@ test("openai-responses shaped payloads restore markers to @path text", async () 
 	assert.deepEqual(outcome.payload, { model: "gpt", input: [{ role: "user", content: `@${pdfPath}` }] });
 });
 
-test("gemini-shaped payloads restore markers inside parts arrays", async () => {
+test("gemini-shaped payloads expand markers to inlineData parts", async () => {
 	const outcome = await rewritePayload({
 		model: "gemini",
 		contents: [{ role: "user", parts: [{ text: `see ${marker} now` }] }],
 	});
-	assert.equal(outcome.attached, 0);
-	assert.deepEqual(outcome.unattachedNames, [pdfPath]);
+	assert.equal(outcome.attached, 1);
+	assert.deepEqual(outcome.unattachedNames, []);
 	assert.deepEqual(outcome.payload, {
 		model: "gemini",
-		contents: [{ role: "user", parts: [{ text: `see @${pdfPath} now` }] }],
+		contents: [
+			{
+				role: "user",
+				parts: [
+					{ text: "see" },
+					{ inlineData: { data: Buffer.from("%PDF-1.4").toString("base64"), mimeType: "application/pdf" } },
+					{ text: "now" },
+				],
+			},
+		],
 	});
+});
+
+test("gemini payload with multiple mentions in one part expands all", async () => {
+	const dir2 = await mkdtemp(join(tmpdir(), "pi-media-gemini-"));
+	await writeFile(join(dir2, "a.mp3"), "audio");
+	await writeFile(join(dir2, "b.mp4"), "video");
+	const aMarker = makeMarker(join(dir2, "a.mp3"), "audio/mpeg");
+	const bMarker = makeMarker(join(dir2, "b.mp4"), "video/mp4");
+	const outcome = await rewritePayload({
+		contents: [{ role: "user", parts: [{ text: `${aMarker} and ${bMarker}` }] }],
+	});
+	assert.equal(outcome.attached, 2);
+	const parts = (outcome.payload as { contents: { parts: unknown[] }[] }).contents[0].parts;
+	assert.deepEqual(parts, [
+		{ inlineData: { data: Buffer.from("audio").toString("base64"), mimeType: "audio/mpeg" } },
+		{ text: "and" },
+		{ inlineData: { data: Buffer.from("video").toString("base64"), mimeType: "video/mp4" } },
+	]);
+});
+
+test("gemini payload keeps marker text when file is unreadable", async () => {
+	const missing = makeMarker(join(dir, "gone.mp3"), "audio/mpeg");
+	const outcome = await rewritePayload({
+		contents: [{ role: "user", parts: [{ text: missing }] }],
+	});
+	assert.equal(outcome.attached, 0);
+	assert.deepEqual(outcome.unattachedNames, [join(dir, "gone.mp3")]);
+	assert.deepEqual(outcome.payload, {
+		contents: [{ role: "user", parts: [{ text: missing }] }],
+	});
+});
+
+test("gemini payload without markers returns no-op", async () => {
+	const outcome = await rewritePayload({
+		contents: [{ role: "user", parts: [{ text: "hello" }] }],
+	});
+	assert.deepEqual(outcome, { attached: 0, unattachedNames: [] });
 });
 
 test("assistant messages containing markers in chat-completions payloads also expand", async () => {

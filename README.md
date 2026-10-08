@@ -19,7 +19,8 @@ PI-Desktop v1 不发射 pi CLI 的 `input` 事件,所以移植版改用两个钩
    - 音频 / 视频 / PDF(或图片但模型不吃图)→ 把提及改写成 `[[pi-media:路径|MIME]]` 占位标记,交给下一步。
 2. **`before_provider_request` 钩子**(拿到 provider 原生请求体):
    - 判定为 **chat-completions 形态**(OpenAI 兼容网关如 OpenRouter)→ 把标记换成 `{"type":"file","file":{data, media_type}}` part,音频/视频/PDF 真正内联;
-   - **其他任何形态**(openai-responses、Anthropic 直连、Gemini 直连…)→ 没有对应的通用 file part,标记被还原成原 `@路径` 文本,同时 ui.notify 提示"该文件未内联"。模型仍可自己用 read 工具打开,不会报错。
+   - 判定为 **Gemini 形态**(google-generative-ai)→ 把标记换成 `{inlineData: {data, mimeType}}` part,音频/视频/PDF 原生理解(这是 Gemini API 的官方格式);
+   - **其他任何形态**(openai-responses、Anthropic 直连…)→ 没有对应的通用 file part,标记被还原成原 `@路径` 文本,同时 ui.notify 提示"该文件未内联"。模型仍可自己用 read 工具打开,不会报错。
 
 只改 detached copy,不动持久转录 ⇒ 每条消息每次调用都重新扫描、重新附件,与原扩展"附件逐轮重发"的语义一致,幂等。
 
@@ -28,9 +29,9 @@ PI-Desktop v1 不发射 pi CLI 的 `input` 事件,所以移植版改用两个钩
 | Provider(adapter) | 图片 | 音频 / 视频 / PDF |
 |---|---|---|
 | OpenAI 兼容网关 / OpenRouter(openai-completions) | ✅ image part | ✅ `{type:"file"}` part |
+| **Gemini 直连**(google-generative-ai) | ✅ image part | ✅ `{inlineData}` part(原生理解) |
 | openai-responses(本机当前 `cpa`) | ✅ image part | ⚠️ 还原为 `@路径` + notify 提示 |
 | Anthropic 直连 | ✅ image part | ⚠️ 还原为 `@路径` + notify 提示 |
-| Gemini 直连 | ✅ image part | ⚠️ 还原为 `@路径` + notify 提示 |
 
 ## 与原 pi-media 的差异
 
